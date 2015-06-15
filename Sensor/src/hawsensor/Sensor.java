@@ -5,23 +5,30 @@ import javax.xml.ws.Endpoint;
 public class Sensor {
 
 	public static void main(String[] args) {
-		SensorService sensor = new SensorService(argumentParser(args));
-		
-		while(true) {
-			
+		try {
+			SensorService sensor = new SensorService(argumentParser(args));
+			while (true) {
+
+			}
+		} catch (Exception e) {
+			// TODO Auto-generated catch block
+			e.printStackTrace();
 		}
+		
 	}
 	
 	private static String[] argumentParser(String[] args) {
-		String [] resu = new String[2];
+		String [] resu = new String[3];
 		for (int i = 0; i < args.length; ++i) {
+			if (args[i].contains("--name=")) {
+				resu[2] = readArgument(args[i]);
+			}
 			if (args[i].contains("--port=")) {
 				resu[0] = readArgument(args[i]);
 			}
 			if (args[i].contains("--url=")) {
 				resu[1] = readArgument(args[i]);
 			}
-
 			if (args[i].contains("--help")) {
 				printHelpMessage();
 				System.exit(0);
