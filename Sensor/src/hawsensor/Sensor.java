@@ -1,24 +1,21 @@
 package hawsensor;
 
-import javax.xml.ws.Endpoint;
-
 public class Sensor {
 
 	public static void main(String[] args) {
 		try {
 			SensorService sensor = new SensorService(argumentParser(args));
 			while (true) {
-
+				// TODO: shutdown
 			}
 		} catch (Exception e) {
-			// TODO Auto-generated catch block
 			e.printStackTrace();
 		}
-		
+
 	}
-	
+
 	private static String[] argumentParser(String[] args) {
-		String [] resu = new String[3];
+		String[] resu = new String[4];
 		for (int i = 0; i < args.length; ++i) {
 			if (args[i].contains("--name=")) {
 				resu[2] = readArgument(args[i]);
@@ -29,13 +26,16 @@ public class Sensor {
 			if (args[i].contains("--url=")) {
 				resu[1] = readArgument(args[i]);
 			}
+			if (args[i].contains("--display=")) {
+				resu[3] = readArgument(args[i]);
+			}
 			if (args[i].contains("--help")) {
 				printHelpMessage();
 				System.exit(0);
 			}
 		}
 		return resu;
-		
+
 	}
 
 	private static String readArgument(final String line) {
@@ -49,6 +49,7 @@ public class Sensor {
 		str.append("Arguments:\n");
 		str.append("--port=arg          Set the port for new Sensor\n");
 		str.append("--url=arg           Set url for Sensor that will be asked\n");
+		str.append("--display=arg       Set to expected format: 0 or 1 for each position (ie nw,no,sw,so => 1111 or nw,so => 1001)\n");
 		str.append("--help              Print this help message\n");
 		System.out.println(str);
 	}

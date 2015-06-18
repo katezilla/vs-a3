@@ -1,13 +1,18 @@
 package hawsensor;
+/**
+ * TODO: wenn trigger ausbleibt, election starten
+ * TODO: entfernen aus liste, wenn nicht reagiert ( Exception)
+ */
 
 import hawmeterproxy.HAWMeteringWebservice;
 import hawmeterproxy.HAWMeteringWebserviceService;
 
 import java.net.MalformedURLException;
 import java.net.URL;
+import java.util.Date;
 import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.Semaphore;
 import java.util.concurrent.TimeUnit;
-import java.util.concurrent.locks.Condition;
 
 import javax.jws.WebParam;
 import javax.jws.WebService;
@@ -17,27 +22,42 @@ import javax.xml.namespace.QName;
 import javax.xml.ws.Endpoint;
 
 import Sensorproxy.SensorServiceService;
+import Sensorproxy.StringArray;
 
 @WebService
 @SOAPBinding(style = Style.RPC)
 public class SensorService {
+	private static final int DISPLAY_N = 4;
 	private static final int ASK_FOR_COORD_TIMEOUT = 500;
+	private static final String IP = "localhost";
 	public static final String NAMESPACE_URI = "http://hawsensor/";
 	public static final String LOCAL_PART = "SensorServiceService";
 	private URL ownURL;
-	private URL coordinatorUrl;
-	private boolean coordinator;
-	private URL[] activeSensors;
+	private SensorDBImpl activeSensors;
 	private int timeout;
-	private String[] globalDisplay = new String[4];
-	private String[] ownDisplay;
+	private String[] globalDisplay = new String[DISPLAY_N];
+	private String[] ownDisplay = new String[DISPLAY_N];
+	private String[] requestedDisplays = new String[DISPLAY_N];
 	private ElectionHandler election;
 	private CountDownLatch answerElectionTimeout;
+	private Thread coordinatorTrigger;
+	private Semaphore semBooleanChanged;
+	public static final String DISPLAY_POSITIONS[] = { "nw", "no", "sw", "so" };
+	private static final double MIN_VALUE = 0;
+	private static final double MAX_VALUE = 100;
 
+	/**
+	 * 
+	 * @param argumentParser
+	 *            .. at Position 0: port ;Position 1: url ; Position 2: name;
+	 *            Position 3: display
+	 * @throws Exception
+	 *             , if sensor shut down after occured error
+	 */
 	public SensorService(String[] argumentParser) throws Exception {
-
+		semBooleanChanged = new Semaphore(0);
 		try {
-			ownURL = new URL("http://localhost:" + argumentParser[0] + "/"
+			ownURL = new URL("http://" + IP + ":" + argumentParser[0] + "/"
 					+ argumentParser[2]);
 		} catch (MalformedURLException e) {
 			e.printStackTrace();
@@ -46,14 +66,11 @@ public class SensorService {
 		System.out.println("ownURL: " + ownURL.toString());
 		Endpoint.publish(ownURL.toString(), this);
 
+		ownDisplay = parseDisplayArgument(argumentParser[3]);
 		if (argumentParser[1] != null && argumentParser[1] != "") {
-			SensorServiceService service;
 			try {
-				service = new SensorServiceService(new URL(argumentParser[1]),
-						new QName(SensorService.NAMESPACE_URI,
-								SensorService.LOCAL_PART));
-				Sensorproxy.SensorService sevice_richtig = service
-						.getSensorServicePort();
+				Sensorproxy.SensorService sevice_richtig = getSensorService(new URL(
+						argumentParser[1]));
 
 				// bei anderem Sensor nach dem koordinator anfragen
 				String koorurl = "";
@@ -64,58 +81,219 @@ public class SensorService {
 				}
 
 				System.out.println("koorurl: " + koorurl);
-				coordinatorUrl = new URL(koorurl);
-				service = new SensorServiceService(coordinatorUrl, new QName(
-						SensorService.NAMESPACE_URI, SensorService.LOCAL_PART));
-				Sensorproxy.SensorService koordi = service
-						.getSensorServicePort();
-				// TODO:
-				// if(koordi.reqDisplay(ownURL.toString(), reqDisplays))
-				// if(koordi.register(ownURL.toString(), reqDisplays;)){
-				//
-				// } else {throw new Exception("No Display acknowledged, shut down.")}
+				URL koor = new URL(koorurl);
+				activeSensors.setCoordinator(koorurl);
+				semBooleanChanged.release();
+				Sensorproxy.SensorService koordi = getSensorService(koor);
+
+				StringArray reqDisplays = getStringArray(ownDisplay);
+				if (koordi.reqDisplay(ownURL.toString(), reqDisplays)) {
+					if (koordi.register(ownURL.toString(), reqDisplays)) {
+						// TODO: ready, check if functionality is needed
+					} else {
+						// this exception is being caught by Sensors main
+						throw new Exception(
+								"No Display acknowledged, shut down.");
+					}
+				}
 			} catch (MalformedURLException e) {
 				e.printStackTrace();
+				throw new Exception("URL invalid, shut down");
 			}
 		} else { // wenn keine sensor url mit gegeben ist dieser der erste ->
 					// Koordinator
-			coordinatorUrl = ownURL;
-			coordinator = true;
-			//TODO: set Intervals etc for all Displays
+			// set Intervals etc for all Displays if wanted
+			// HAWMeteringWebservice display;
+			// for (int i = 0; i < DISPLAY_N; i++) {
+			// display = getDisplay(i);
+			// display.clearIntervals();
+			// display.setIntervals(DISPLAY_POSITIONS[i].toUpperCase(),
+			// MIN_VALUE,
+			// MAX_VALUE, color);
+			// }
+
+			activeSensors.setCoordinator(ownURL.toString());
+			// initialize activeSensors and globalDisplay
+			URL[] sensorList = activeSensors.getSensors();
+			sensorList[0] = ownURL;
+			activeSensors.setSensors(sensorList, ownURL.toString());
+			globalDisplay = ownDisplay.clone();
 		}
-		election = new ElectionHandler(this);
+		election = new ElectionHandler(this, activeSensors, semBooleanChanged); // TODO:
+																				// shutdown
+		coordinatorTrigger = new Thread(new CoordinatorTrigger(
+				ownURL.toString(), semBooleanChanged, activeSensors));
+		coordinatorTrigger.start();// TODO: shutdown
 	}
 
-	public void updateAll(@WebParam(name = "sender") String sender,
+	/**
+	 * 
+	 * @param argument
+	 *            expected format: 0 or 1 for each position (ie nw,no,sw,so =>
+	 *            1111 or nw,so => 1001)
+	 * @return list of own Displays
+	 */
+	private String[] parseDisplayArgument(String argument) {
+		String[] result = new String[4];
+		for (int i = 0; i < DISPLAY_N; i++) {
+			if (argument.charAt(i) == '1') {
+				result[i] = ownURL.toString();
+			}
+		}
+		return result;
+	}
+
+	/**
+	 * @param url
+	 * @return
+	 */
+	private Sensorproxy.SensorService getSensorService(URL url) {
+		return new SensorServiceService(url, new QName(
+				SensorService.NAMESPACE_URI, SensorService.LOCAL_PART))
+				.getSensorServicePort();
+	}
+
+	public synchronized void updateAll(
+			@WebParam(name = "sender") String sender,
 			@WebParam(name = "globalDisoplay") String[] globalDisoplay,
 			@WebParam(name = "activeSensors") String[] activeSensors) {
-
+		if (this.activeSensors.isCoordinator(sender)) {
+			this.globalDisplay = globalDisoplay;
+			this.requestedDisplays = new String[DISPLAY_N];
+			URL[] urlList = new URL[DISPLAY_N];
+			for (int i = 0; i < DISPLAY_N; i++) {
+				try {
+					urlList[i] = new URL(activeSensors[i]);
+				} catch (MalformedURLException e) {
+					e.printStackTrace();
+				}
+			}
+			this.activeSensors.setSensors(urlList, sender);
+		} else {
+			System.err.println("Received updateAll call from: " + sender);
+		}
 	}
 
+	/**
+	 * coordinator activates this method to trigger each sensor every 2 sec
+	 * 
+	 * @param sender
+	 * @return .. 0, if successfully updated; -1, if update failed
+	 */
 	public int sendTrigger(@WebParam(name = "sender") String sender) {
-		if(sender.equals(coordinatorUrl.toString())){
-			try {
-				HAWMeteringWebserviceService service = new HAWMeteringWebserviceService(new URL("http://localhost:9999/hawmetering/nw?wsdl"), new QName(
-						"http://localhost/","HAWMeteringWebserviceService"));
-				HAWMeteringWebservice display = service.getHAWMeteringWebservicePort();
-//				display.setValue(val);
-			} catch (MalformedURLException e) {
-				e.printStackTrace();
+		if (activeSensors.isCoordinator(sender)) {
+			HAWMeteringWebservice display;
+			for (int i = 0; i < DISPLAY_N; i++) {
+				try {
+					display = getDisplay(i);
+					display.setValue(calcValue());
+				} catch (MalformedURLException e) {
+					e.printStackTrace();
+					return -1;
+				}
 			}
+		} else {
+			System.err.println("Received sendTrigger call from: " + sender);
+			return -1;
 		}
 		return 0;
 	}
 
-	public boolean reqDisplay(@WebParam(name = "sender") String sender,
-			@WebParam(name = "reqDisplays") String[] reqDisplays) {
-		return coordinator; // TODO
-
+	/**
+	 * @param i
+	 * @return
+	 * @throws MalformedURLException
+	 */
+	private HAWMeteringWebservice getDisplay(int i)
+			throws MalformedURLException {
+		return new HAWMeteringWebserviceService(new URL("http://" + IP
+				+ ":9999/hawmetering/" + DISPLAY_POSITIONS[i] + "?wsdl"),
+				new QName("http://" + IP + "/", "HAWMeteringWebserviceService"))
+				.getHAWMeteringWebservicePort();
 	}
 
-	public boolean register(@WebParam(name = "sender") String sender,
+	public synchronized boolean reqDisplay(
+			@WebParam(name = "sender") String sender,
 			@WebParam(name = "reqDisplays") String[] reqDisplays) {
-		return coordinator; // TODO
+		boolean result = true;
+		if (activeSensors.isCoordinator(ownURL.toString())) {
+			for (int i = 0; i < DISPLAY_N; i++) {
+				if (reqDisplays[i] != null && reqDisplays[i] != "") {
+					if (globalDisplay[i] != ""
+							|| this.requestedDisplays[i] != "") {
+						result = false;
+						System.out.println("Requested display " + i
+								+ " already registered by " + globalDisplay[i]
+								+ ".");
+						requestedDisplays = cleanDisplays(requestedDisplays,
+								sender);
+						break;
+					} else {
+						requestedDisplays[i] = reqDisplays[i];
+					}
+				}
+			}
+		} else {
+			System.err.println("Received reqDisplay call from: " + sender
+					+ ", even though I'm not coordinator.");
+			result = false;
+		}
+		return result;
+	}
 
+	public synchronized boolean register(
+			@WebParam(name = "sender") String sender,
+			@WebParam(name = "reqDisplays") String[] reqDisplays) {
+		boolean result = true;
+		if (activeSensors.isCoordinator(ownURL.toString())) {
+			for (int i = 0; i < DISPLAY_N; i++) {
+				if (reqDisplays[i] != null && reqDisplays[i] != "") {
+					if (globalDisplay[i] != ""
+							|| !(this.requestedDisplays[i]
+									.equals(reqDisplays[i]))) {
+						System.out.println("Requested display " + i
+								+ " registered by " + globalDisplay[i]
+								+ " or requested by " + requestedDisplays[i]
+								+ ".");
+						requestedDisplays = cleanDisplays(requestedDisplays,
+								sender);
+						globalDisplay = cleanDisplays(globalDisplay, sender);
+						result = false;
+						break;
+					} else {
+						globalDisplay[i] = reqDisplays[i];
+					}
+				}
+			}
+		} else {
+			System.err.println("Received reqDisplay call from: " + sender
+					+ ", even though I'm not coordinator.");
+			result = false;
+		}
+		if (result) {
+			StringArray globalDisplays = getStringArray(globalDisplay);
+			StringArray activeSensors = getStringArray(this.activeSensors
+					.getSensors());
+			for (URL sensor : this.activeSensors.getSensors()) {
+				getSensorService(sensor).updateAll(ownURL.toString(),
+						globalDisplays, activeSensors);
+			}
+		}
+		return result;
+	}
+
+	/**
+	 * @param displays
+	 * @param sender
+	 */
+	private String[] cleanDisplays(String[] displays, String sender) {
+		// clean up requestedDisplays
+		for (int i = 0; i < DISPLAY_N; i++) {
+			if (displays[i].equals(sender)) {
+				displays[i] = "";
+			}
+		}
+		return displays;
 	}
 
 	public void election(@WebParam(name = "sender") String sender) {
@@ -137,7 +315,8 @@ public class SensorService {
 
 	public void newCoordinator(@WebParam(name = "sender") String sender) {
 		try {
-			coordinatorUrl = new URL(sender);
+			new URL(sender);
+			activeSensors.setCoordinator(sender);
 		} catch (MalformedURLException e) {
 			e.printStackTrace();
 		}
@@ -145,15 +324,11 @@ public class SensorService {
 	}
 
 	public String askForCoordinator() {
-		return coordinatorUrl.toString();
+		return activeSensors.getCoordinator();
 	}
 
 	public URL getOwnURL() {
 		return ownURL;
-	}
-
-	public URL[] getActiveSensors() {
-		return activeSensors;
 	}
 
 	public boolean awaitAnswerElectionTimeout() {
@@ -166,4 +341,28 @@ public class SensorService {
 		}
 	}
 
+	private int calcValue() {
+		long lTicks = new Date().getTime();
+		int messwert = ((int) (lTicks % 20000)) / 100;
+		if (messwert > 100) {
+			messwert = 200 - messwert;
+		}
+		return messwert;
+	}
+
+	private StringArray getStringArray(String[] strings) {
+		StringArray reqDisplays = new StringArray();
+		for (String string : strings) {
+			reqDisplays.getItem().add(string);
+		}
+		return reqDisplays;
+	}
+
+	private StringArray getStringArray(URL[] sensors) {
+		StringArray reqDisplays = new StringArray();
+		for (URL url : sensors) {
+			reqDisplays.getItem().add(url.toString());
+		}
+		return reqDisplays;
+	}
 }

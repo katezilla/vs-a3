@@ -17,7 +17,8 @@ public class ElectionHandler {
 
 	private Semaphore sem_queue;
 
-	ElectionHandler(SensorService ownSensor) {
+	ElectionHandler(final SensorService ownSensor,
+			final SensorDBImpl activeSensors, final Semaphore semBooleanChanged) {
 		messages = new LinkedList<URL>();
 		worker = new Thread() {
 			@Override
@@ -34,19 +35,13 @@ public class ElectionHandler {
 					}
 					message = messages.poll();
 					if (message != null) {
-						messageService = new SensorServiceService(message,
-								new QName(SensorService.NAMESPACE_URI,
-										SensorService.LOCAL_PART))
-								.getSensorServicePort();
+						messageService = getSensorService(message);
 						messageService.answerElection(ownSensor.getOwnURL()
 								.toString());
 						// HOLD_ELECTION
-						for (URL url : ownSensor.getActiveSensors()) {
+						for (URL url : activeSensors.getSensors()) {
 							if (compareUrl(url, ownSensor.getOwnURL()) == 1) {
-								sensor = new SensorServiceService(url,
-										new QName(SensorService.NAMESPACE_URI,
-												SensorService.LOCAL_PART))
-										.getSensorServicePort();
+								sensor = getSensorService(url);
 								sensor.election(ownSensor.getOwnURL()
 										.toString());
 								noLargerUrl = false;
@@ -56,14 +51,13 @@ public class ElectionHandler {
 							// timeout
 							if (!ownSensor.awaitAnswerElectionTimeout()) {
 								// I'm the Coordinator, bow down!
-								for (URL url : ownSensor.getActiveSensors()) {
+								activeSensors.setCoordinator(ownSensor
+										.getOwnURL().toString());
+								semBooleanChanged.release();
+								// signal coordinatorTrigger, that he can work
+								for (URL url : activeSensors.getSensors()) {
 									if (compareUrl(url, ownSensor.getOwnURL()) == -1) {
-										sensor = new SensorServiceService(
-												url,
-												new QName(
-														SensorService.NAMESPACE_URI,
-														SensorService.LOCAL_PART))
-												.getSensorServicePort();
+										sensor = getSensorService(url);
 										sensor.newCoordinator(ownSensor
 												.getOwnURL().toString());
 									}
@@ -78,6 +72,12 @@ public class ElectionHandler {
 						break;
 					}
 				} // while true
+			}
+
+			private Sensorproxy.SensorService getSensorService(URL url) {
+				return new SensorServiceService(url, new QName(
+						SensorService.NAMESPACE_URI, SensorService.LOCAL_PART))
+						.getSensorServicePort();
 			}
 		};
 		worker.start();
@@ -107,7 +107,7 @@ public class ElectionHandler {
 		}
 	}
 
-	public void shutdown(){
+	public void shutdown() {
 		sem_queue.release();
 	}
 }
