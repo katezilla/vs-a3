@@ -9,10 +9,11 @@ import hawmeterproxy.HAWMeteringWebserviceService;
 
 import java.net.MalformedURLException;
 import java.net.URL;
+import java.util.ArrayList;
+import java.util.Calendar;
 import java.util.Date;
-import java.util.concurrent.CountDownLatch;
-import java.util.concurrent.Semaphore;
-import java.util.concurrent.TimeUnit;
+import java.util.Timer;
+import java.util.TimerTask;
 
 import javax.jws.WebParam;
 import javax.jws.WebService;
@@ -31,19 +32,51 @@ public class SensorService {
 	private static final int ASK_FOR_COORD_TIMEOUT = 500;
 	private static final int TIMEOUT_TRIGGER = 2500;
 	private static final int timeoutAnswerElection = 1000; // TODO: set good
-															// value
+														   // value
 	private static final String IP = "0.0.0.0";
 	public static final String NAMESPACE_URI = "http://hawsensor/";
 	public static final String LOCAL_PART = "SensorServiceService";
 	public static final String DISPLAY_POSITIONS[] = { "nw", "no", "sw", "so" };
+	
+	private boolean isCoordinator;
 	private URL ownURL;
-	private SensorDBImpl activeSensors = new SensorDBImpl();
-	private String[] globalDisplay = new String[DISPLAY_N];
-	private String[] ownDisplay = new String[DISPLAY_N];
-	private String[] requestedDisplays = new String[DISPLAY_N];
+	private URL coordinatorURL;
+	
+	private String[] allDisplays; // TODO: Send with update
+	private String[] ownDisplays; // TODO: Send with update
+	private ArrayList<URL> allSensors; // TODO: Send with update
+	
+	ElectionHandler elect;
+	
+	private Sensorproxy.ObjectFactory sensorFactory;
+	
+	private Timer coordinatorTimer;
+	private TimerTask coordinatorTask = new TimerTask() {
+		@Override
+		public void run() {
+			if (isCoordinator) {
+				for (URL sensorURL : allSensors) {
+					new SensorServiceService(sensorURL, new QName(
+							SensorService.NAMESPACE_URI, SensorService.LOCAL_PART))
+							.getSensorServicePort().sendTrigger(sensorURL.toString());
+				}
+			}
+		}
+	};
+	
+	boolean gotTrigger = false;
+	private Timer triggerTimer;
+	private TimerTask triggerTimeoutTask = new TimerTask() {
+		@Override
+		public void run() {
+			if(!gotTrigger) {
+				// TODO start new election
+			}
+			gotTrigger = false;
+		}
+	};
+	
 	private ElectionHandler election;
-	private CountDownLatch timeoutLatchAnswerElection;
-	private CountDownLatch timeoutLatchTrigger;
 	
 	private CoordinatorTrigger coordinatorTrigger;
 
@@ -56,129 +89,64 @@ public class SensorService {
 	 *             , if sensor shut down after occured error
 	 */
 	public SensorService(String[] argumentParser) throws Exception {
-		try {
-			ownURL = new URL("http://" + IP + ":" + argumentParser[0] + "/"
-					+ argumentParser[2]);
-		} catch (MalformedURLException e) {
-			e.printStackTrace();
-			throw new Exception("Invalid Port or name entered");
+		// Init
+		isCoordinator = false;
+		allDisplays = new String[DISPLAY_N];
+		ownDisplays = new String[DISPLAY_N];
+		for (int i = 0; i < DISPLAY_N; ++i) {
+			allDisplays[i] = new String("");
+			ownDisplays[i] = new String("");
 		}
-		System.out.println("ownURL: " + ownURL.toString());
+		ownURL = new URL("http://" + IP + ":" + argumentParser[0]
+		         + "/" + argumentParser[2]);
+		ownDisplays = parseDisplayArgument(argumentParser[3]);
 		Endpoint.publish(ownURL.toString(), this);
-
-		ownDisplay = parseDisplayArgument(argumentParser[3]);
-		if (argumentParser[1] != null && argumentParser[1] != "") {
-			try {
-				Sensorproxy.SensorService sevice_richtig = getSensorService(new URL(
-						argumentParser[1]));
-
-				// bei anderem Sensor nach dem koordinator anfragen
-				String koorurl = "";
-				koorurl = sevice_richtig.askForCoordinator();
-				while (koorurl == "") {
-					wait(ASK_FOR_COORD_TIMEOUT);
-					koorurl = sevice_richtig.askForCoordinator();
-				}
-
-				System.out.println("koorurl: " + koorurl);
-				URL koor = new URL(koorurl);
-				activeSensors.setCoordinator(koorurl);
-				//semBooleanChanged.release();
-				Sensorproxy.SensorService koordi = getSensorService(koor);
-
-				StringArray reqDisplays = getStringArray(ownDisplay);
-				if (koordi.reqDisplay(ownURL.toString(), reqDisplays)) {
-					if (koordi.register(ownURL.toString(), reqDisplays)) {
-						// TODO: ready, check if functionality is needed
-					} else {
-						// this exception is being caught by Sensors main
-						throw new Exception(
-								"No Display acknowledged, shut down.");
-					}
-				}
-			} catch (MalformedURLException e) {
-				e.printStackTrace();
-				throw new Exception("URL invalid, shut down");
+		allSensors = new ArrayList<URL>();
+		sensorFactory = new Sensorproxy.ObjectFactory();
+		// Setup coordinator task...
+		coordinatorTimer = new Timer();
+		coordinatorTimer.scheduleAtFixedRate(coordinatorTask,
+				2000 - (Calendar.getInstance().getTimeInMillis() % 2000),// delay
+				2000); // period
+		triggerTimer = new Timer();
+		triggerTimer.scheduleAtFixedRate(triggerTimeoutTask, TIMEOUT_TRIGGER, TIMEOUT_TRIGGER);
+		// Get coordinator URL
+		if (argumentParser[1] != null) {
+			// We are not the coordinator, ask the given sensor
+			// for the coordinator's url.
+			coordinatorURL = new URL(getSensorService(argumentParser[1]).askForCoordinator());
+			if(!getSensorService(coordinatorURL.toString()).register(
+					ownURL.toString(), createStringArray(ownDisplays))) {
+				throw new Exception("not allowed to register");
 			}
-		} else { // wenn keine sensor url mit gegeben ist dieser der erste ->
-					// Koordinator
-			// set Intervals etc for all Displays if wanted
-			// HAWMeteringWebservice display;
-			// for (int i = 0; i < DISPLAY_N; i++) {
-			// display = getDisplay(i);
-			// display.clearIntervals();
-			// display.setIntervals(DISPLAY_POSITIONS[i].toUpperCase(),
-			// MIN_VALUE,
-			// MAX_VALUE, color);
-			// }
-			activeSensors.setCoordinator(ownURL.toString());
-			// initialize activeSensors and globalDisplay
-			URL[] sensorList = activeSensors.getSensors();
-			sensorList[0] = ownURL;
-			activeSensors.setSensors(sensorList, ownURL.toString());
-			globalDisplay = ownDisplay.clone();
+		} else {
+			// We are the coordinator.
+			isCoordinator = true;
+			coordinatorURL = ownURL;
+			allDisplays = ownDisplays;
+			allSensors.add(ownURL);
 		}
-		election = new ElectionHandler(this, activeSensors); // TODO:
-																				// shutdown
-		coordinatorTrigger = new CoordinatorTrigger(ownURL.toString(), activeSensors);
-		while (true) {
-			timeoutLatchTrigger = new CountDownLatch(1);
-			try {
-				timeoutLatchTrigger.await(TIMEOUT_TRIGGER,
-						TimeUnit.MILLISECONDS);
-				// was not interrupted by a new trigger => start election
-				//election(getOwnURL().toString());
-			} catch (InterruptedException e) {
-				e.printStackTrace();
-			}
-		}
+		elect = new ElectionHandler(this, allDisplays);
 	}
 
-	/**
-	 * 
-	 * @param argument
-	 *            expected format: 0 or 1 for each position (ie nw,no,sw,so =>
-	 *            1111 or nw,so => 1001)
-	 * @return list of own Displays
-	 */
-	private String[] parseDisplayArgument(String argument) {
-		String[] result = new String[4];
-		for (int i = 0; i < DISPLAY_N; i++) {
-			if (argument.charAt(i) == '1') {
-				result[i] = ownURL.toString();
-			}
-		}
-		return result;
-	}
-
-	/**
-	 * @param url
-	 * @return
-	 */
-	private Sensorproxy.SensorService getSensorService(URL url) {
-		return new SensorServiceService(url, new QName(
-				SensorService.NAMESPACE_URI, SensorService.LOCAL_PART))
-				.getSensorServicePort();
-	}
 
 	public synchronized void updateAll(
 			@WebParam(name = "sender") String sender,
 			@WebParam(name = "globalDisoplay") String[] globalDisoplay,
 			@WebParam(name = "activeSensors") String[] activeSensors) {
-		if (this.activeSensors.isCoordinator(sender)) {
-			this.globalDisplay = globalDisoplay;
-			this.requestedDisplays = new String[DISPLAY_N];
-			URL[] urlList = new URL[DISPLAY_N];
-			for (int i = 0; i < DISPLAY_N; i++) {
-				try {
-					urlList[i] = new URL(activeSensors[i]);
-				} catch (MalformedURLException e) {
-					e.printStackTrace();
-				}
+		// Alle Daten "updates" zu anderen sensoren senden (!außer selbst!)
+		allDisplays = globalDisoplay;
+		ArrayList<URL> allSensors = new ArrayList<URL>();
+		for(int i = 0; i < DISPLAY_N; ++i) {
+			URL url = null;
+			try {
+				url = new URL(globalDisoplay[i]);
+			} catch (MalformedURLException e) {
+				e.printStackTrace();
 			}
-			this.activeSensors.setSensors(urlList, sender);
-		} else {
-			System.err.println("Received updateAll call from: " + sender);
+			if(!allSensors.contains(url)) {
+				allSensors.add(url);
+			}
 		}
 	}
 
@@ -189,168 +157,98 @@ public class SensorService {
 	 * @return .. 0, if successfully updated; -1, if update failed
 	 */
 	public int sendTrigger(@WebParam(name = "sender") String sender) {
-		if (activeSensors.isCoordinator(sender)) {
-			timeoutLatchTrigger.countDown();
-			HAWMeteringWebservice display;
-			for (int i = 0; i < DISPLAY_N; i++) {
+		// Send trigger => Wird aufgerufen vom koordinator damit die sensoren
+		// ihr display aktualisieren
+		gotTrigger = true;
+		for(int i = 0; i < DISPLAY_N; ++i ) {
+			System.out.println("triggerd");
+			if(!ownDisplays[i].isEmpty()) {
 				try {
-					display = getDisplay(i);
-					display.setValue(calcValue());
+					getDisplay(i).setValue(this.calcValue());
 				} catch (MalformedURLException e) {
 					e.printStackTrace();
-					return -1;
 				}
 			}
-		} else {
-			System.err.println("Received sendTrigger call from: " + sender);
-			return -1;
 		}
 		return 0;
-	}
-
-	/**
-	 * @param i
-	 * @return
-	 * @throws MalformedURLException
-	 */
-	private HAWMeteringWebservice getDisplay(int i)
-			throws MalformedURLException {
-		return new HAWMeteringWebserviceService(new URL("http://" + "marian-macbook"
-				+ ":9999/hawmetering/" + DISPLAY_POSITIONS[i] + "?wsdl"),
-				new QName("http://" + IP + "/", "HAWMeteringWebserviceService"))
-				.getHAWMeteringWebservicePort();
 	}
 
 	public synchronized boolean reqDisplay(
 			@WebParam(name = "sender") String sender,
 			@WebParam(name = "reqDisplays") String[] reqDisplays) {
-		boolean result = true;
-		if (activeSensors.isCoordinator(ownURL.toString())) {
-			for (int i = 0; i < DISPLAY_N; i++) {
-				if (reqDisplays[i] != null && reqDisplays[i] != "") {
-					if (globalDisplay[i] != ""
-							|| this.requestedDisplays[i] != "") {
-						result = false;
-						System.out.println("Requested display " + i
-								+ " already registered by " + globalDisplay[i]
-								+ ".");
-						requestedDisplays = cleanDisplays(requestedDisplays,
-								sender);
-						break;
-					} else {
-						requestedDisplays[i] = reqDisplays[i];
-					}
-				}
-			}
-		} else {
-			System.err.println("Received reqDisplay call from: " + sender
-					+ ", even though I'm not coordinator.");
-			result = false;
-		}
-		return result;
+		// Delete me later!
+		return true;
 	}
 
 	public synchronized boolean register(
 			@WebParam(name = "sender") String sender,
 			@WebParam(name = "reqDisplays") String[] reqDisplays) {
-		boolean result = true;
-		if (activeSensors.isCoordinator(ownURL.toString())) {
-			for (int i = 0; i < DISPLAY_N; i++) {
-				if (reqDisplays[i] != null && reqDisplays[i] != "") {
-					if (globalDisplay[i] != ""
-							|| !(this.requestedDisplays[i]
-									.equals(reqDisplays[i]))) {
-						System.out.println("Requested display " + i
-								+ " registered by " + globalDisplay[i]
-								+ " or requested by " + requestedDisplays[i]
-								+ ".");
-						requestedDisplays = cleanDisplays(requestedDisplays,
-								sender);
-						globalDisplay = cleanDisplays(globalDisplay, sender);
-						result = false;
-						break;
-					} else {
-						globalDisplay[i] = reqDisplays[i];
-					}
+		boolean resu = true;
+		for(int i = 0; i < DISPLAY_N; ++i) {
+			if(!reqDisplays[i].isEmpty() && !allDisplays[i].isEmpty()) {
+				resu = false;
+				break;
+			}
+		}
+		// add new sensor to list
+		if(resu) {
+			for(int i = 0; i < DISPLAY_N; ++i) {
+				if(!reqDisplays[i].isEmpty()) {
+					allDisplays[i] = reqDisplays[i];	
 				}
 			}
-		} else {
-			System.err.println("Received reqDisplay call from: " + sender
-					+ ", even though I'm not coordinator.");
-			result = false;
-		}
-		if (result) {
-			StringArray globalDisplays = getStringArray(globalDisplay);
-			StringArray activeSensors = getStringArray(this.activeSensors
-					.getSensors());
-			for (URL sensor : this.activeSensors.getSensors()) {
-				getSensorService(sensor).updateAll(ownURL.toString(),
-						globalDisplays, activeSensors);
-			}
-		}
-		return result;
-	}
-
-	/**
-	 * @param displays
-	 * @param sender
-	 */
-	private String[] cleanDisplays(String[] displays, String sender) {
-		// clean up requestedDisplays
-		for (int i = 0; i < DISPLAY_N; i++) {
-			if (displays[i].equals(sender)) {
-				displays[i] = "";
-			}
-		}
-		return displays;
-	}
-
-	public void election(@WebParam(name = "sender") String sender) {
-		if (timeoutLatchAnswerElection.getCount() <= 0
-				|| timeoutLatchAnswerElection == null) {
 			try {
-				election.put(new URL(sender));
+				allSensors.add(new URL(sender));
 			} catch (MalformedURLException e) {
 				e.printStackTrace();
 			}
+			StringArray global = sensorFactory.createStringArray();
+			for (int i = 0; i < DISPLAY_N; ++i) {
+				global.getItem().add(allDisplays[i]);
+			}
+			StringArray active = sensorFactory.createStringArray();
+			for (URL url : allSensors) {
+				active.getItem().add(url.toString());
+			}
+			// Update all
+			for(String url : active.getItem()) {
+				getSensorService(url.toString()).updateAll(ownURL.toString(), global, active);
+			}
+		}
+		return resu;
+	}
+	
+	public void election(@WebParam(name = "sender") String sender) {
+		try {
+			this.elect.put(new URL(sender));
+		} catch (MalformedURLException e) {
+			// TODO Auto-generated catch block
+			e.printStackTrace();
 		}
 	}
 
 	public void answerElection(@WebParam(name = "sender") String sender) {
-		if (timeoutLatchAnswerElection != null) {
-			timeoutLatchAnswerElection.countDown();
-		}
+		
 	}
 
 	public void newCoordinator(@WebParam(name = "sender") String sender) {
 		try {
-			new URL(sender);
-			activeSensors.setCoordinator(sender);
+			coordinatorURL = new URL(sender);
 		} catch (MalformedURLException e) {
 			e.printStackTrace();
 		}
-
 	}
 
 	public String askForCoordinator() {
-		return activeSensors.getCoordinator();
-	}
-
-	public URL getOwnURL() {
-		return ownURL;
+		return coordinatorURL.toString();
 	}
 
 	public boolean awaitAnswerElectionTimeout() {
-		timeoutLatchAnswerElection = new CountDownLatch(1);
-		try {
-			return timeoutLatchAnswerElection.await(timeoutAnswerElection,
-					TimeUnit.MILLISECONDS);
-		} catch (InterruptedException e) {
-			e.printStackTrace();
-			return false;
-		}
+		return true;
 	}
 
+	// -----------------------------------------------------------
+	
 	private int calcValue() {
 		long lTicks = new Date().getTime();
 		int messwert = ((int) (lTicks % 20000)) / 100;
@@ -359,20 +257,61 @@ public class SensorService {
 		}
 		return messwert;
 	}
+	
 
-	private StringArray getStringArray(String[] strings) {
-		StringArray reqDisplays = new StringArray();
-		for (String string : strings) {
-			reqDisplays.getItem().add(string);
+	/**
+	 * @param url
+	 * @return
+	 */
+	private Sensorproxy.SensorService getSensorService(String url) {
+		try {
+			return new SensorServiceService(new URL(url), new QName(
+					SensorService.NAMESPACE_URI, SensorService.LOCAL_PART))
+					.getSensorServicePort();
+		} catch (MalformedURLException e) {
+			e.printStackTrace();
 		}
-		return reqDisplays;
+		return null;
+	}
+	
+	/**
+	 * 
+	 * @param argument
+	 *            expected format: 0 or 1 for each position (ie nw,no,sw,so =>
+	 *            1111 or nw,so => 1001)
+	 * @return list of own Displays
+	 */
+	private String[] parseDisplayArgument(String argument) {
+		String[] result = new String[4];
+		for (int i = 0; i < DISPLAY_N; i++) {
+			result[i] = argument.charAt(i) == '1' ? ownURL.toString() : new String("");
+		}
+		return result;
+	}
+	
+
+	/**
+	 * @param i
+	 * @return
+	 * @throws MalformedURLException
+	 */
+	private HAWMeteringWebservice getDisplay(int i)
+			throws MalformedURLException {
+		return new HAWMeteringWebserviceService(new URL("http://" + "localhost" // TODO
+				+ ":9999/hawmetering/" + DISPLAY_POSITIONS[i] + "?wsdl"),
+				new QName("http://hawmetering/", "HAWMeteringWebserviceService"))
+				.getHAWMeteringWebservicePort();
+	}
+	
+	private StringArray createStringArray(String[] array) {
+		StringArray resu = sensorFactory.createStringArray();
+		for (String s : array) {
+			resu.getItem().add(s);
+		}
+		return resu;
 	}
 
-	private StringArray getStringArray(URL[] sensors) {
-		StringArray reqDisplays = new StringArray();
-		for (URL url : sensors) {
-			reqDisplays.getItem().add(url.toString());
-		}
-		return reqDisplays;
+	public URL getOwnURL() {
+		return ownURL;
 	}
 }

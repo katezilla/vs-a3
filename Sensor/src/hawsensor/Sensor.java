@@ -4,14 +4,21 @@ public class Sensor {
 
 	public static void main(String[] args) {
 		try {
-			SensorService sensor = new SensorService(argumentParser(args));
+			String[] arguments = argumentParser(args);
+			if (arguments[0] == null || arguments[2] == null
+					|| arguments[3] == null) {
+				System.out.println("Arguments are not valid.");
+				printHelpMessage();
+				return;
+			}
+			SensorService sensor = new SensorService(arguments);
 			while (true) {
+				Thread.sleep(1000);
 				// TODO: shutdown
 			}
 		} catch (Exception e) {
 			e.printStackTrace();
 		}
-
 	}
 
 	private static String[] argumentParser(String[] args) {
@@ -35,7 +42,6 @@ public class Sensor {
 			}
 		}
 		return resu;
-
 	}
 
 	private static String readArgument(final String line) {

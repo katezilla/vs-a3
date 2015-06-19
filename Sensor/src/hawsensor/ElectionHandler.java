@@ -1,5 +1,6 @@
 package hawsensor;
 
+import java.net.MalformedURLException;
 import java.net.URL;
 import java.util.LinkedList;
 import java.util.Queue;
@@ -17,15 +18,14 @@ public class ElectionHandler {
 
     private Semaphore sem_queue = new Semaphore(0);
 
-    ElectionHandler(final SensorService ownSensor,
-            final SensorDBImpl activeSensors) {
+    ElectionHandler(final SensorService ownSensor, final String [] allSensors) {
         messages = new LinkedList<URL>();
         worker = new Thread() {
             @Override
             public void run() {
                 URL message = null;
                 Sensorproxy.SensorService messageService;
-                Sensorproxy.SensorService sensor;
+                Sensorproxy.SensorService sensor = null;
                 boolean noLargerUrl = true;
                 while (true) {
                     try {
@@ -35,7 +35,7 @@ public class ElectionHandler {
                     }
                     message = messages.poll();
                     if (message != null) {
-                        if (compareUrl(message, ownSensor.getOwnURL()) == 0) {
+                        if (compareString(message.toString(), ownSensor.getOwnURL().toString()) == 0) {
                             // election started by me
                         } else {
                             messageService = getSensorService(message);
@@ -43,9 +43,13 @@ public class ElectionHandler {
                                     .toString());
                         }
                         // HOLD_ELECTION
-                        for (URL url : activeSensors.getSensors()) {
-                            if (compareUrl(url, ownSensor.getOwnURL()) == 1) {
-                                sensor = getSensorService(url);
+                        for (String url : allSensors) {
+                            if (compareString(url, ownSensor.getOwnURL().toString()) == 1) {
+                                try {
+									sensor = getSensorService(new URL(url));
+								} catch (MalformedURLException e) {
+									e.printStackTrace();
+								}
                                 sensor.election(ownSensor.getOwnURL()
                                         .toString());
                                 noLargerUrl = false;
@@ -54,18 +58,18 @@ public class ElectionHandler {
                         if (!noLargerUrl) {
                             // timeout
                             if (!ownSensor.awaitAnswerElectionTimeout()) {
-                                // I'm the Coordinator, bow down!
-                                activeSensors.setCoordinator(ownSensor
-                                        .getOwnURL().toString());
                                 //semBooleanChanged.release();
                                 // signal coordinatorTrigger, that he can work
-                                for (URL url : activeSensors.getSensors()) {
-                                    if (compareUrl(url, ownSensor.getOwnURL()) == -1) {
-                                        sensor = getSensorService(url);
-                                        sensor.newCoordinator(ownSensor
-                                                .getOwnURL().toString());
-                                    }
-                                }
+								for (String url : allSensors) {
+									try {
+										sensor = getSensorService(new URL(url));
+									} catch (MalformedURLException e) {
+										e.printStackTrace();
+									}
+									sensor.newCoordinator(ownSensor.getOwnURL()
+											.toString());
+
+								}
                             } else {
                                 // there is another Sensor that is more capable
                             }
@@ -100,8 +104,8 @@ public class ElectionHandler {
      * @return 0 if equal 1 if url is greater than ownURL -1 if url is smaller
      *         than ownURL
      */
-    protected int compareUrl(URL url, URL ownURL) {
-        int result = url.toString().compareTo(ownURL.toString());
+    protected int compareString(String url, String ownURL) {
+        int result = url.compareTo(ownURL);
         if (result < 0) {
             return -1;
         } else if (result > 0) {
