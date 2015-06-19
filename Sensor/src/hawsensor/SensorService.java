@@ -32,20 +32,20 @@ public class SensorService {
 	private static final int TIMEOUT_TRIGGER = 2500;
 	private static final int timeoutAnswerElection = 1000; // TODO: set good
 															// value
-	private static final String IP = "localhost";
+	private static final String IP = "0.0.0.0";
 	public static final String NAMESPACE_URI = "http://hawsensor/";
 	public static final String LOCAL_PART = "SensorServiceService";
 	public static final String DISPLAY_POSITIONS[] = { "nw", "no", "sw", "so" };
 	private URL ownURL;
-	private SensorDBImpl activeSensors;
+	private SensorDBImpl activeSensors = new SensorDBImpl();
 	private String[] globalDisplay = new String[DISPLAY_N];
 	private String[] ownDisplay = new String[DISPLAY_N];
 	private String[] requestedDisplays = new String[DISPLAY_N];
 	private ElectionHandler election;
 	private CountDownLatch timeoutLatchAnswerElection;
-	private Thread coordinatorTrigger;
-	private Semaphore semBooleanChanged;
 	private CountDownLatch timeoutLatchTrigger;
+	
+	private CoordinatorTrigger coordinatorTrigger;
 
 	/**
 	 * 
@@ -56,7 +56,6 @@ public class SensorService {
 	 *             , if sensor shut down after occured error
 	 */
 	public SensorService(String[] argumentParser) throws Exception {
-		semBooleanChanged = new Semaphore(0);
 		try {
 			ownURL = new URL("http://" + IP + ":" + argumentParser[0] + "/"
 					+ argumentParser[2]);
@@ -84,7 +83,7 @@ public class SensorService {
 				System.out.println("koorurl: " + koorurl);
 				URL koor = new URL(koorurl);
 				activeSensors.setCoordinator(koorurl);
-				semBooleanChanged.release();
+				//semBooleanChanged.release();
 				Sensorproxy.SensorService koordi = getSensorService(koor);
 
 				StringArray reqDisplays = getStringArray(ownDisplay);
@@ -112,7 +111,6 @@ public class SensorService {
 			// MIN_VALUE,
 			// MAX_VALUE, color);
 			// }
-
 			activeSensors.setCoordinator(ownURL.toString());
 			// initialize activeSensors and globalDisplay
 			URL[] sensorList = activeSensors.getSensors();
@@ -120,18 +118,16 @@ public class SensorService {
 			activeSensors.setSensors(sensorList, ownURL.toString());
 			globalDisplay = ownDisplay.clone();
 		}
-		election = new ElectionHandler(this, activeSensors, semBooleanChanged); // TODO:
+		election = new ElectionHandler(this, activeSensors); // TODO:
 																				// shutdown
-		coordinatorTrigger = new Thread(new CoordinatorTrigger(
-				ownURL.toString(), semBooleanChanged, activeSensors));
-		coordinatorTrigger.start();// TODO: shutdown
+		coordinatorTrigger = new CoordinatorTrigger(ownURL.toString(), activeSensors);
 		while (true) {
 			timeoutLatchTrigger = new CountDownLatch(1);
 			try {
 				timeoutLatchTrigger.await(TIMEOUT_TRIGGER,
 						TimeUnit.MILLISECONDS);
 				// was not interrupted by a new trigger => start election
-				election(getOwnURL().toString());
+				//election(getOwnURL().toString());
 			} catch (InterruptedException e) {
 				e.printStackTrace();
 			}
@@ -219,7 +215,7 @@ public class SensorService {
 	 */
 	private HAWMeteringWebservice getDisplay(int i)
 			throws MalformedURLException {
-		return new HAWMeteringWebserviceService(new URL("http://" + IP
+		return new HAWMeteringWebserviceService(new URL("http://" + "marian-macbook"
 				+ ":9999/hawmetering/" + DISPLAY_POSITIONS[i] + "?wsdl"),
 				new QName("http://" + IP + "/", "HAWMeteringWebserviceService"))
 				.getHAWMeteringWebservicePort();

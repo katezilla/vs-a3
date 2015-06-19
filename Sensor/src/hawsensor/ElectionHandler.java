@@ -15,10 +15,10 @@ public class ElectionHandler {
 
     Thread worker;
 
-    private Semaphore sem_queue;
+    private Semaphore sem_queue = new Semaphore(0);
 
     ElectionHandler(final SensorService ownSensor,
-            final SensorDBImpl activeSensors, final Semaphore semBooleanChanged) {
+            final SensorDBImpl activeSensors) {
         messages = new LinkedList<URL>();
         worker = new Thread() {
             @Override
@@ -57,7 +57,7 @@ public class ElectionHandler {
                                 // I'm the Coordinator, bow down!
                                 activeSensors.setCoordinator(ownSensor
                                         .getOwnURL().toString());
-                                semBooleanChanged.release();
+                                //semBooleanChanged.release();
                                 // signal coordinatorTrigger, that he can work
                                 for (URL url : activeSensors.getSensors()) {
                                     if (compareUrl(url, ownSensor.getOwnURL()) == -1) {
