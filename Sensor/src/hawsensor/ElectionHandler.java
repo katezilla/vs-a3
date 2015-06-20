@@ -2,9 +2,6 @@ package hawsensor;
 
 import java.net.URL;
 import java.util.ArrayList;
-import java.util.LinkedList;
-import java.util.Queue;
-import java.util.concurrent.Semaphore;
 
 import javax.xml.namespace.QName;
 

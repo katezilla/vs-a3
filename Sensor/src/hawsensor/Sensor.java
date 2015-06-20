@@ -14,7 +14,6 @@ public class Sensor {
 			SensorService sensor = new SensorService(arguments);
 			while (true) {
 				Thread.sleep(1000);
-				// TODO: shutdown
 			}
 		} catch (Exception e) {
 			e.printStackTrace();

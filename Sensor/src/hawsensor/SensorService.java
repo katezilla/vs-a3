@@ -1,9 +1,5 @@
 package hawsensor;
 
-/**
- * TODO: entfernen aus liste, wenn nicht reagiert ( Exception)
- */
-
 import hawmeterproxy.HAWMeteringWebservice;
 import hawmeterproxy.HAWMeteringWebserviceService;
 
@@ -29,10 +25,8 @@ import Sensorproxy.StringArray;
 @SOAPBinding(style = Style.RPC)
 public class SensorService {
 	private static final int DISPLAY_N = 4;
-	private static final int ASK_FOR_COORD_TIMEOUT = 500;
 	private static final int TIMEOUT_TRIGGER = 2500;
-	private static final int timeoutAnswerElection = 1000; // TODO: set good
-														   // value
+
 	private static final String IP = "0.0.0.0";
 	public static final String NAMESPACE_URI = "http://hawsensor/";
 	public static final String LOCAL_PART = "SensorServiceService";
@@ -42,9 +36,9 @@ public class SensorService {
 	private URL ownURL;
 	private URL coordinatorURL;
 	
-	private String[] allDisplays; // TODO: Send with update
-	private String[] ownDisplays; // TODO: Send with update
-	private ArrayList<URL> allSensors; // TODO: Send with update
+	private String[] allDisplays;
+	private String[] ownDisplays;
+	private ArrayList<URL> allSensors;
 	
 	ElectionHandler elect;
 	
@@ -262,7 +256,12 @@ public class SensorService {
 			}
 			for(String url : active.getItem()) {
 				if (ownURL.toString().compareTo(url) != 0) {
-					getSensorService(url.toString()).updateAll(ownURL.toString(), global, active);
+					try{
+						getSensorService(url.toString()).updateAll(ownURL.toString(), global, active);
+					} catch (Exception e){
+						e.printStackTrace();
+					}
+					
 				}
 			}
 	    }
