@@ -72,13 +72,11 @@ public class SensorService {
 		@Override
 		public void run() {
 			if(!gotTrigger) {
-				// TODO start new election
+				elect.electione();
 			}
 			gotTrigger = false;
 		}
 	};
-	
-	private ElectionHandler election;
 
 	/**
 	 * 
@@ -128,7 +126,7 @@ public class SensorService {
 			    allSensors.add(ownURL);
 			}
 		}
-		elect = new ElectionHandler(this, allDisplays);
+		elect = new ElectionHandler(this);
 	}
 
 
@@ -145,7 +143,7 @@ public class SensorService {
 				try {
 					url = new URL(globalDisoplay[i]);
 				} catch (MalformedURLException e) {
-					//e.printStackTrace();
+					
 				}
 				if(url != null && !allSensors.contains(url)) {
 					allSensors.add(url);
@@ -230,16 +228,12 @@ public class SensorService {
 	}
 	
 	public void election(@WebParam(name = "sender") String sender) {
-		try {
-			this.elect.put(new URL(sender));
-		} catch (MalformedURLException e) {
-			// TODO Auto-generated catch block
-			e.printStackTrace();
-		}
+		System.out.println("Got vote from: " + sender);
+		this.elect.electione();
 	}
 
 	public void answerElection(@WebParam(name = "sender") String sender) {
-		System.out.println("blub answerd");
+		//System.out.println("blub answerd");
 	}
 
 	public void newCoordinator(@WebParam(name = "sender") String sender) {
@@ -248,14 +242,34 @@ public class SensorService {
 		} catch (MalformedURLException e) {
 			e.printStackTrace();
 		}
+	    this.isCoordinator = sender.compareTo(ownURL.toString()) == 0;
+	    if (this.isCoordinator) {
+	    	System.out.println("I'm the new coordinator...");
+			StringArray global = sensorFactory.createStringArray();
+			StringArray active = sensorFactory.createStringArray();
+			synchronized(allSensors) {
+				try {
+					allSensors.add(new URL(sender));
+				} catch (MalformedURLException e) {
+					e.printStackTrace();
+				}
+				for (int i = 0; i < DISPLAY_N; ++i) {
+					global.getItem().add(allDisplays[i]);
+				}
+				for (URL url : allSensors) {
+					active.getItem().add(url.toString());
+				}
+			}
+			for(String url : active.getItem()) {
+				if (ownURL.toString().compareTo(url) != 0) {
+					getSensorService(url.toString()).updateAll(ownURL.toString(), global, active);
+				}
+			}
+	    }
 	}
 
 	public String askForCoordinator() {
 		return coordinatorURL.toString();
-	}
-
-	public boolean awaitAnswerElectionTimeout() {
-		return true;
 	}
 
 	// -----------------------------------------------------------
@@ -324,5 +338,24 @@ public class SensorService {
 
 	public URL getOwnURL() {
 		return ownURL;
+	}
+	
+	public void removeFromAll(String url) {
+		for (int i = 0; i < DISPLAY_N; ++i) {
+			if (this.allDisplays[i].compareTo(url) == 0) {
+				this.allDisplays[i] = "";
+			}
+		}
+		try {
+			synchronized(allSensors) {
+				this.allSensors.remove(new URL(url));
+			}
+		} catch (MalformedURLException e) {
+			e.printStackTrace();
+		}
+	}
+	
+	public ArrayList<URL> getAllSensors() {
+		return this.allSensors;
 	}
 }
