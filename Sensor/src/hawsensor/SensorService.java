@@ -55,10 +55,12 @@ public class SensorService {
 		@Override
 		public void run() {
 			if (isCoordinator) {
-				for (URL sensorURL : allSensors) {
-					new SensorServiceService(sensorURL, new QName(
-							SensorService.NAMESPACE_URI, SensorService.LOCAL_PART))
-							.getSensorServicePort().sendTrigger(sensorURL.toString());
+				synchronized(allSensors) {
+					for (URL sensorURL : allSensors) {
+						new SensorServiceService(sensorURL, new QName(
+								SensorService.NAMESPACE_URI, SensorService.LOCAL_PART))
+								.getSensorServicePort().sendTrigger(sensorURL.toString());
+					}
 				}
 			}
 		}
@@ -77,8 +79,6 @@ public class SensorService {
 	};
 	
 	private ElectionHandler election;
-	
-	private CoordinatorTrigger coordinatorTrigger;
 
 	/**
 	 * 
@@ -124,28 +124,32 @@ public class SensorService {
 			isCoordinator = true;
 			coordinatorURL = ownURL;
 			allDisplays = ownDisplays;
-			allSensors.add(ownURL);
+			synchronized(allSensors) {
+			    allSensors.add(ownURL);
+			}
 		}
 		elect = new ElectionHandler(this, allDisplays);
 	}
 
 
-	public synchronized void updateAll(
+	public void updateAll(
 			@WebParam(name = "sender") String sender,
 			@WebParam(name = "globalDisoplay") String[] globalDisoplay,
 			@WebParam(name = "activeSensors") String[] activeSensors) {
 		// Alle Daten "updates" zu anderen sensoren senden (!außer selbst!)
 		allDisplays = globalDisoplay;
-		ArrayList<URL> allSensors = new ArrayList<URL>();
-		for(int i = 0; i < DISPLAY_N; ++i) {
-			URL url = null;
-			try {
-				url = new URL(globalDisoplay[i]);
-			} catch (MalformedURLException e) {
-				e.printStackTrace();
-			}
-			if(!allSensors.contains(url)) {
-				allSensors.add(url);
+		synchronized(allSensors) {
+			allSensors.clear();
+			for(int i = 0; i < DISPLAY_N; ++i) {
+				URL url = null;
+				try {
+					url = new URL(globalDisoplay[i]);
+				} catch (MalformedURLException e) {
+					//e.printStackTrace();
+				}
+				if(url != null && !allSensors.contains(url)) {
+					allSensors.add(url);
+				}
 			}
 		}
 	}
@@ -160,11 +164,11 @@ public class SensorService {
 		// Send trigger => Wird aufgerufen vom koordinator damit die sensoren
 		// ihr display aktualisieren
 		gotTrigger = true;
+		int val = this.calcValue();
 		for(int i = 0; i < DISPLAY_N; ++i ) {
-			System.out.println("triggerd");
 			if(!ownDisplays[i].isEmpty()) {
 				try {
-					getDisplay(i).setValue(this.calcValue());
+					getDisplay(i).setValue(val);
 				} catch (MalformedURLException e) {
 					e.printStackTrace();
 				}
@@ -173,17 +177,20 @@ public class SensorService {
 		return 0;
 	}
 
-	public synchronized boolean reqDisplay(
+	public boolean reqDisplay(
 			@WebParam(name = "sender") String sender,
 			@WebParam(name = "reqDisplays") String[] reqDisplays) {
 		// Delete me later!
 		return true;
 	}
 
-	public synchronized boolean register(
+	public boolean register(
 			@WebParam(name = "sender") String sender,
 			@WebParam(name = "reqDisplays") String[] reqDisplays) {
 		boolean resu = true;
+		for (String str : reqDisplays) {
+		  System.out.println(str);
+		}
 		for(int i = 0; i < DISPLAY_N; ++i) {
 			if(!reqDisplays[i].isEmpty() && !allDisplays[i].isEmpty()) {
 				resu = false;
@@ -197,22 +204,26 @@ public class SensorService {
 					allDisplays[i] = reqDisplays[i];	
 				}
 			}
-			try {
-				allSensors.add(new URL(sender));
-			} catch (MalformedURLException e) {
-				e.printStackTrace();
-			}
 			StringArray global = sensorFactory.createStringArray();
-			for (int i = 0; i < DISPLAY_N; ++i) {
-				global.getItem().add(allDisplays[i]);
-			}
 			StringArray active = sensorFactory.createStringArray();
-			for (URL url : allSensors) {
-				active.getItem().add(url.toString());
+			synchronized(allSensors) {
+				try {
+					allSensors.add(new URL(sender));
+				} catch (MalformedURLException e) {
+					e.printStackTrace();
+				}
+				for (int i = 0; i < DISPLAY_N; ++i) {
+					global.getItem().add(allDisplays[i]);
+				}
+				for (URL url : allSensors) {
+					active.getItem().add(url.toString());
+				}
 			}
 			// Update all
 			for(String url : active.getItem()) {
-				getSensorService(url.toString()).updateAll(ownURL.toString(), global, active);
+				if (ownURL.toString().compareTo(url) != 0) {
+					getSensorService(url.toString()).updateAll(ownURL.toString(), global, active);
+				}
 			}
 		}
 		return resu;
@@ -228,7 +239,7 @@ public class SensorService {
 	}
 
 	public void answerElection(@WebParam(name = "sender") String sender) {
-		
+		System.out.println("blub answerd");
 	}
 
 	public void newCoordinator(@WebParam(name = "sender") String sender) {
