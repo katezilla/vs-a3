@@ -17,8 +17,9 @@ public class ElectionHandler {
     public void electione () {
     	boolean voted = false;
     	ArrayList<URL> ourCopy = new ArrayList<URL>();
+    	ArrayList<URL> ourServicesCopy = new ArrayList<URL>();
 		synchronized(ownSensor.getAllSensors()) {
-			for (URL url : ownSensor.getAllSensors()) {
+			for (int i = 0; i < SensorService.DISPLAY_N;i++) {
 				ourCopy.add(url);
 			}
 		}    	

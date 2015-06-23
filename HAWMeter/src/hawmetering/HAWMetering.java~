@@ -51,7 +51,7 @@ public class HAWMetering extends ApplicationFrame {
         String names[] = {"nw", "no", "sw", "so"};
         for (int i = 0; i < chart.length; i++) {
             HAWMeteringWebservice webservice = new HAWMeteringWebservice(chart[i]);
-            Endpoint.publish("http://lab26:9999/hawmetering/" + names[i], webservice);
+            Endpoint.publish("http://0.0.0.0:9999/hawmetering/" + names[i], webservice);
         }
     }
 
