@@ -117,7 +117,7 @@ public class SensorService {
 			// We are the coordinator.
 			isCoordinator = true;
 			coordinatorURL = ownURL;
-			allDisplays = ownDisplays;
+			allDisplays = ownDisplays.clone();
 			synchronized (allSensors) {
 				allSensors.add(ownURL);
 				allSensorsService.add(allSensors.indexOf(ownURL),
@@ -258,12 +258,14 @@ public class SensorService {
 			synchronized (allSensors) {
 				try {
 					URL url = new URL(sender);
-					allSensors.add(url);
-					allSensorsService.add(allSensors.indexOf(url),
-							new SensorServiceService(new URL(sender),
-									new QName(SensorService.NAMESPACE_URI,
-											SensorService.LOCAL_PART))
-									.getSensorServicePort());
+					if (!allSensors.contains(url)) {
+						allSensors.add(url);
+						allSensorsService.add(allSensors.indexOf(url),
+								new SensorServiceService(new URL(sender),
+										new QName(SensorService.NAMESPACE_URI,
+												SensorService.LOCAL_PART))
+										.getSensorServicePort());
+					}
 				} catch (MalformedURLException e) {
 					e.printStackTrace();
 				}
